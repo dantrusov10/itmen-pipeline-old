@@ -12,7 +12,9 @@ let modalSuggestion = null;
 let saveInFlight = null;
 let metricsCache = null;
 let activePage = "panel";
-let dashboardFilters = { owner: "", category: "", budgetPeriod: [] };
+let dashboardFilters = { owner: "", category: "", budgetPeriod: [], stage: [] };
+const INACTIVE_OWNERS = ["Павел Витков"];
+let dashboardEventsBound = false;
 
 function invalidateMetricsCache() {
   metricsCache = null;
@@ -32,7 +34,31 @@ function getDashboardDeals() {
     const selected = new Set(dashboardFilters.budgetPeriod);
     deals = deals.filter(d => selected.has(d.budgetPeriod || "Не определён"));
   }
+  if (dashboardFilters.stage?.length) {
+    const selected = new Set(dashboardFilters.stage);
+    deals = deals.filter(d => selected.has(d.stage || "—"));
+  }
   return deals;
+}
+
+function getDashboardOwners() {
+  const fromDeals = new Set((state?.deals || []).map(d => d.owner).filter(Boolean));
+  const order = (state?.lists?.owners || []).filter(o => !INACTIVE_OWNERS.includes(o));
+  const owners = order.filter(o => fromDeals.has(o));
+  fromDeals.forEach(o => {
+    if (!INACTIVE_OWNERS.includes(o) && !owners.includes(o)) owners.push(o);
+  });
+  return owners.sort((a, b) => a.localeCompare(b, "ru"));
+}
+
+function dashStageOptions() {
+  const base = state?.lists?.stages || window.ITMEN_INITIAL?.lists?.stages || [];
+  const all = [...base];
+  (state?.deals || []).forEach(d => {
+    const s = d.stage;
+    if (s && !all.includes(s)) all.push(s);
+  });
+  return all;
 }
 
 function dashBudgetPeriodOptions() {
@@ -90,7 +116,79 @@ function closeDashMultiselectPanels(except) {
 }
 
 function dashFiltersActive() {
-  return dashboardFilters.owner || dashboardFilters.category || dashboardFilters.budgetPeriod?.length;
+  return dashboardFilters.owner || dashboardFilters.category
+    || dashboardFilters.budgetPeriod?.length || dashboardFilters.stage?.length;
+}
+
+function bindDashboardEvents() {
+  if (dashboardEventsBound) return;
+  dashboardEventsBound = true;
+  const el = document.getElementById("page-panel");
+  if (!el) return;
+
+  el.addEventListener("change", e => {
+    if (e.target.id === "dash-filter-owner") {
+      dashboardFilters.owner = e.target.value;
+      renderPanel(getDashboardMetrics());
+      return;
+    }
+    if (e.target.id === "dash-filter-category") {
+      dashboardFilters.category = e.target.value;
+      renderPanel(getDashboardMetrics());
+      return;
+    }
+    if (e.target.classList.contains("dash-ms-cb")) {
+      syncDashMultiselect(e.target.dataset.dashKey);
+      renderPanel(getDashboardMetrics());
+    }
+  });
+
+  el.addEventListener("click", e => {
+    if (e.target.id === "dash-clear-filters") {
+      dashboardFilters = { owner: "", category: "", budgetPeriod: [], stage: [] };
+      renderPanel(getDashboardMetrics());
+      return;
+    }
+    const toggle = e.target.closest(".dash-ms-toggle");
+    if (toggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const wrap = toggle.closest(".dash-ms-filter");
+      if (!wrap) return;
+      const opening = !wrap.classList.contains("open");
+      closeDashMultiselectPanels(opening ? wrap : null);
+      wrap.classList.toggle("open", opening);
+      return;
+    }
+    const clearBtn = e.target.closest(".dash-ms-clear");
+    if (clearBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const key = clearBtn.dataset.dashKey;
+      const wrap = clearBtn.closest(".dash-ms-filter");
+      wrap?.querySelectorAll(".dash-ms-cb").forEach(cb => { cb.checked = false; });
+      dashboardFilters[key] = [];
+      updateDashMultiselectLabel(key);
+      renderPanel(getDashboardMetrics());
+      return;
+    }
+    const allBtn = e.target.closest(".dash-ms-all");
+    if (allBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      const key = allBtn.dataset.dashKey;
+      const wrap = allBtn.closest(".dash-ms-filter");
+      wrap?.querySelectorAll(".dash-ms-cb").forEach(cb => { cb.checked = true; });
+      syncDashMultiselect(key);
+      renderPanel(getDashboardMetrics());
+      return;
+    }
+    if (e.target.closest(".deals-ms-opt")) {
+      e.stopPropagation();
+      return;
+    }
+    if (!e.target.closest(".dash-ms-filter")) closeDashMultiselectPanels();
+  });
 }
 
 function getDashboardMetrics() {
@@ -145,6 +243,9 @@ function migrateState(s) {
   if (init.lists?.partners) s.lists.partners = init.lists.partners;
   if (s.lists?.owners?.includes("Не назначен")) {
     s.lists.owners = s.lists.owners.filter(o => o !== "Не назначен");
+  }
+  if (s.lists?.owners) {
+    s.lists.owners = s.lists.owners.filter(o => !INACTIVE_OWNERS.includes(o));
   }
   if (!s.nextId) {
     const nums = s.deals.map(d => {
@@ -229,7 +330,7 @@ function renderPanel(m) {
   const el = document.getElementById("page-panel");
   if (!el) return;
   const n = m.pipelineCount ?? m.deals?.length ?? 0;
-  const owners = state.lists?.owners || [];
+  const owners = getDashboardOwners();
   const categories = ["Горячая", "Тёплая", "Наблюдение", "Отказ"];
   const maxCommit = Math.max(1, ...Object.values(m.commitCounts));
   const maxStage = Math.max(1, ...(m.stageFunnel || []).map(x => x.count));
@@ -240,6 +341,7 @@ function renderPanel(m) {
   const ownerRows = Object.entries(m.byOwner || {}).sort((a, b) => b[1].weighted - a[1].weighted);
   const budgetRows = Object.entries(m.byBudget || {}).sort((a, b) => b[1].pipeline - a[1].pipeline);
   const periodOptions = dashBudgetPeriodOptions();
+  const stageOptions = dashStageOptions();
 
   el.innerHTML = `
     <div class="dashboard-filters">
@@ -254,6 +356,9 @@ function renderPanel(m) {
           <option value="">Все</option>
           ${categories.map(c => `<option value="${escapeHtml(c)}" ${dashboardFilters.category === c ? "selected" : ""}>${escapeHtml(c)}</option>`).join("")}
         </select>
+      </label>
+      <label>Стадия
+        ${renderDashMultiselect("stage", stageOptions, dashboardFilters.stage)}
       </label>
       <label>Срок
         ${renderDashMultiselect("budgetPeriod", periodOptions, dashboardFilters.budgetPeriod)}
@@ -432,61 +537,6 @@ function renderPanel(m) {
       : window.ITMEN_API?.enabled
         ? "Данные на сервере · автосохранение при изменениях."
         : "Данные сохраняются локально в браузере."} Каталог вендоров: ${catalogCountLabel?.() ?? "—"} позиций.</div>`;
-
-  document.getElementById("dash-filter-owner")?.addEventListener("change", e => {
-    dashboardFilters.owner = e.target.value;
-    renderPanel(getDashboardMetrics());
-  });
-  document.getElementById("dash-filter-category")?.addEventListener("change", e => {
-    dashboardFilters.category = e.target.value;
-    renderPanel(getDashboardMetrics());
-  });
-  el.addEventListener("click", e => {
-    const toggle = e.target.closest(".dash-ms-toggle");
-    if (toggle) {
-      e.preventDefault();
-      e.stopPropagation();
-      const wrap = toggle.closest(".dash-ms-filter");
-      const open = wrap?.classList.contains("open");
-      closeDashMultiselectPanels();
-      if (wrap && !open) wrap.classList.add("open");
-      return;
-    }
-    const clearBtn = e.target.closest(".dash-ms-clear");
-    if (clearBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      const key = clearBtn.dataset.dashKey;
-      const wrap = clearBtn.closest(".dash-ms-filter");
-      wrap?.querySelectorAll(".dash-ms-cb").forEach(cb => { cb.checked = false; });
-      dashboardFilters[key] = [];
-      updateDashMultiselectLabel(key);
-      renderPanel(getDashboardMetrics());
-      return;
-    }
-    const allBtn = e.target.closest(".dash-ms-all");
-    if (allBtn) {
-      e.preventDefault();
-      e.stopPropagation();
-      const key = allBtn.dataset.dashKey;
-      const wrap = allBtn.closest(".dash-ms-filter");
-      wrap?.querySelectorAll(".dash-ms-cb").forEach(cb => { cb.checked = true; });
-      syncDashMultiselect(key);
-      renderPanel(getDashboardMetrics());
-      return;
-    }
-    if (!e.target.closest(".dash-ms-filter")) closeDashMultiselectPanels();
-  });
-  el.addEventListener("change", e => {
-    if (e.target.classList.contains("dash-ms-cb")) {
-      syncDashMultiselect(e.target.dataset.dashKey);
-      renderPanel(getDashboardMetrics());
-    }
-  });
-  document.getElementById("dash-clear-filters")?.addEventListener("click", () => {
-    dashboardFilters = { owner: "", category: "", budgetPeriod: [] };
-    renderPanel(getDashboardMetrics());
-  });
 }
 
 function renderScoring() {
@@ -969,6 +1019,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     m.addEventListener("click", e => { if (e.target === m) m.classList.remove("open"); });
   });
 
+  bindDashboardEvents();
+  if (typeof bindDealsTableEvents === "function") bindDealsTableEvents();
   renderAll();
   navigate(location.hash.replace("#", "") || "panel");
 });

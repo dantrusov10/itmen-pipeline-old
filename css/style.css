@@ -561,6 +561,7 @@ body.page-deals-active .deals-table-hint {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
+  overflow: visible;
 }
 .dashboard-filters label {
   display: flex;
