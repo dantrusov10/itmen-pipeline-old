@@ -334,9 +334,8 @@ def row_to_deal(row, idx):
     stage = map_stage(row.get("Этап сделки"))
     budget = parse_num(row.get("Бюджет"))
     turnover = parse_num(row.get("Оборот сделки"))
-    contract = parse_num(row.get("Сумма всего контракта"))
-    amount = budget or turnover or 0
-    expected = contract or (budget if budget else 0)
+    amount = budget or 0
+    expected = turnover or 0
 
     segs = segments_from_product(row.get("Продукт ИТМен") or row.get("Продукт Сфера"))
     tr = build_tech_research(row, segs)

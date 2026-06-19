@@ -178,8 +178,8 @@ window.ITMEN_CONFIG = {
   fieldHints: {
     taskDue: "Срок ближайшей задачи (как в amoCRM).",
     budgetPeriod: "Когда ожидаем решение по бюджету.",
-    expectedAmount: "Ожидаемая сумма контракта.",
-    expectedBudget: "Ожидаемый бюджет клиента на проект.",
+    expectedAmount: "Бюджет из выгрузки AmoCRM.",
+    expectedBudget: "Оборот сделки из выгрузки AmoCRM.",
     productReqPct: "Оценка: какой % требований проекта закрывает наш продукт (0–100).",
     pilotReqPct: "Оценка: какой % требований пилота закрывает наш продукт (0–100).",
   },

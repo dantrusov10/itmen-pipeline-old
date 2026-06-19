@@ -182,13 +182,8 @@ function avgRequirementPct(tr) {
 function calcDataQuality(deal) {
   if (!deal.id) return "";
   if (!deal.owner || deal.owner === "Не назначен") return "Неполный";
-  if (!deal.amount && !deal.expectedBudget) return "Неполный";
-  if (!deal.nextStepType) return "Неполный";
-  if (deal.nextStepType === "other" && !deal.nextStepComment?.trim()) return "Неполный";
-  if (deal.riskType === "other" && !deal.riskComment?.trim()) return "Неполный";
-  const tr = deal.techResearch || {};
-  if (!tr.seekingSegments?.length) return "Неполный";
-  if (tr.productRequirementsPct == null && tr.pilotRequirementsPct == null) return "Неполный";
+  if (!deal.customer?.trim()) return "Неполный";
+  if (!deal.amount) return "Неполный";
   return "OK";
 }
 
@@ -285,11 +280,7 @@ function suggestScores(deal) {
 
   if (deal.amount > 0 && scores.budget < 3) {
     scores.budget = Math.max(scores.budget, 2);
-    reasons.budget = (reasons.budget || "") + " Сумма сделки указана.";
-  }
-  if ((deal.expectedBudget || 0) > 0 && scores.budget < 4) {
-    scores.budget = Math.max(scores.budget, 3);
-    reasons.budget = (reasons.budget || "") + " Ожидаемый бюджет указан.";
+    reasons.budget = (reasons.budget || "") + " Ожидаемая сумма указана.";
   }
 
   const segCount = tr.seekingSegments?.length || 0;
@@ -343,15 +334,53 @@ function enrichDeal(deal) {
   const daysTo = daysUntil(d.taskDue);
   const quality = calcDataQuality(d);
   const riskFlag = calcRiskFlag(d, category, daysSince, daysTo);
-  const weighted = (d.amount || 0) * prob;
+  const expectedAmount = Number(d.amount) || 0;
+  const weighted = expectedAmount * prob;
   return {
     ...d, score, computedProb, prob, category, daysSince, daysTo, quality, riskFlag, weighted,
+    expectedAmount,
     commitLabel: commitLabel(d.commitStatus),
     nextStepText: nextStepLabel(d.nextStepType),
     artifact: nextStepArtifact(d.nextStepType),
     projectCompliancePct: d.techResearch?.productRequirementsPct,
     pilotCompliancePct: d.techResearch?.pilotRequirementsPct,
   };
+}
+
+/** Сброс расширенных полей паспорта (бюджет, коммит, боли, риски, тех. блок) */
+function clearDealExtendedFields(deal) {
+  const d = migrateDeal({ ...deal });
+  d.budgetPeriod = "Не определён";
+  d.budgetStatus = "Неизвестно";
+  d.budgetPlannedMonth = null;
+  d.budgetPlannedYear = null;
+  d.budgetAmount = 0;
+  d.expectedBudget = 0;
+  d.commitStatus = "none";
+  d.pains = "";
+  d.nextStepType = "discovery";
+  d.nextStepComment = "";
+  d.riskType = "none";
+  d.riskComment = "";
+  d.techResearch = typeof defaultTechResearch === "function" ? defaultTechResearch() : {
+    seekingSegments: [], asIsStack: {}, changePains: {}, competitorEntries: {}, projectTasks: [],
+    productRequirementsPct: null, pilotRequirementsPct: null,
+  };
+  if (d.scores) {
+    d.scores.commit = commitScoreFromStatus("none");
+    d.scores.budget = 1;
+    d.scores.technical = 0;
+    d.scores.fit = 0;
+    d.scores.competitive = 0;
+  }
+  if (d.scoreReasons) {
+    d.scoreReasons.commit = "Статус коммита: Нет подтверждения";
+    d.scoreReasons.budget = "Статус бюджета неизвестен";
+    d.scoreReasons.technical = "Не заполнено";
+    d.scoreReasons.fit = "Не заполнено";
+    d.scoreReasons.competitive = "Не заполнено";
+  }
+  return d;
 }
 
 function formatMoney(n) {
@@ -371,8 +400,8 @@ function categoryBadge(cat) {
 
 function calcMetrics(deals) {
   const d = deals.map(enrichDeal).filter(x => x.category !== "Отказ");
-  const totalPipeline = d.reduce((s, x) => s + (x.amount || 0), 0);
-  const weighted = d.reduce((s, x) => s + x.weighted, 0);
+  const totalPipeline = d.reduce((s, x) => s + (x.expectedAmount || 0), 0);
+  const weighted = d.reduce((s, x) => s + (x.weighted || 0), 0);
   const counts = { "Горячая": 0, "Тёплая": 0, "Наблюдение": 0, "Отказ": 0 };
   d.forEach(x => { if (x.category) counts[x.category] = (counts[x.category] || 0) + 1; });
   const scores = d.filter(x => x.score != null).map(x => x.score);
@@ -381,7 +410,7 @@ function calcMetrics(deals) {
   const stale = d.filter(x => x.riskFlag === "Устарела (>14 дн.)").length;
   const riskFlags = d.filter(x => x.riskFlag && x.riskFlag !== "Устарела (>14 дн.)").length;
   const confirmedBudget = d.filter(x => x.budgetStatus === "Подтверждён").length;
-  const confirmedBudgetSum = d.filter(x => x.budgetStatus === "Подтверждён").reduce((s, x) => s + (x.amount || 0), 0);
+  const confirmedBudgetSum = d.filter(x => x.budgetStatus === "Подтверждён").reduce((s, x) => s + (x.expectedAmount || 0), 0);
   const commits = window.ITMEN_CONFIG?.commitStatuses || [];
   const commitCounts = {};
   commits.forEach(c => { commitCounts[c.short] = d.filter(x => x.commitStatus === c.id).length; });
@@ -395,7 +424,7 @@ function calcMetrics(deals) {
     const o = x.owner || "Не назначен";
     if (!byOwner[o]) byOwner[o] = { count: 0, pipeline: 0, weighted: 0, hot: 0, warm: 0, scores: [] };
     byOwner[o].count++;
-    byOwner[o].pipeline += x.amount || 0;
+    byOwner[o].pipeline += x.expectedAmount || 0;
     byOwner[o].weighted += x.weighted || 0;
     if (x.category === "Горячая") byOwner[o].hot++;
     if (x.category === "Тёплая") byOwner[o].warm++;
@@ -423,7 +452,7 @@ function calcMetrics(deals) {
     const b = x.budgetStatus || "Неизвестно";
     if (!byBudget[b]) byBudget[b] = { count: 0, pipeline: 0 };
     byBudget[b].count++;
-    byBudget[b].pipeline += x.amount || 0;
+    byBudget[b].pipeline += x.expectedAmount || 0;
   });
 
   const segmentLabels = Object.fromEntries((window.ITMEN_CONFIG?.techSegments || []).map(s => [s.id, s.label]));

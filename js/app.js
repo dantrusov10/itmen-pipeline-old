@@ -178,8 +178,8 @@ function renderPanel(m) {
   el.innerHTML = `
     <div class="grid grid-4" style="margin-bottom:1rem">
       ${metricCard("Сделок в пайплайне", n)}
-      ${metricCard("Общий пайплайн", formatMoney(m.totalPipeline))}
-      ${metricCard("Взвешенный прогноз", formatMoney(m.weighted), m.avgScore != null ? `ср. балл ${m.avgScore}` : "")}
+      ${metricCard("Общий пайплайн", formatMoney(m.totalPipeline), "сумма ожидаемых сумм")}
+      ${metricCard("Взвешенный прогноз", formatMoney(m.weighted), m.avgScore != null ? `ср. балл ${m.avgScore} · от ожид. суммы` : "от ожидаемой суммы")}
       ${metricCard("Подтв. бюджет", m.confirmedBudget, formatMoney(m.confirmedBudgetSum))}
     </div>
     <div class="grid grid-4" style="margin-bottom:1rem">
@@ -306,17 +306,16 @@ function renderPanel(m) {
       <div class="card-header">Top-10 сделок по взвешенному прогнозу</div>
       <div class="card-body table-wrap">
         <table class="dash-table">
-          <thead><tr><th>Клиент</th><th>Владелец</th><th>Стадия</th><th>Сумма</th><th>Взвеш.</th><th>Балл</th><th>Категория</th><th>Бюджет</th></tr></thead>
+          <thead><tr><th>Клиент</th><th>Владелец</th><th>Стадия</th><th>Ожид. сумма</th><th>Взвеш.</th><th>Балл</th><th>Категория</th></tr></thead>
           <tbody>${(m.topDeals || []).map(d => `<tr>
             <td><strong>${escapeHtml(d.customer)}</strong></td>
             <td>${escapeHtml(d.owner)}</td>
             <td><small>${escapeHtml(d.stage)}</small></td>
-            <td class="num">${formatMoney(d.amount)}</td>
+            <td class="num">${formatMoney(d.expectedAmount ?? d.amount)}</td>
             <td class="num">${formatMoney(d.weighted)}</td>
             <td>${d.score ?? "—"}</td>
             <td>${categoryBadge(d.category)}</td>
-            <td><small>${escapeHtml(d.budgetStatus)}</small></td>
-          </tr>`).join("") || "<tr><td colspan='8' class='muted'>Нет сделок</td></tr>"}
+          </tr>`).join("") || "<tr><td colspan='7' class='muted'>Нет сделок</td></tr>"}
           </tbody>
         </table>
       </div>

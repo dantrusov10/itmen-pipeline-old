@@ -21,7 +21,7 @@ const DEALS_TABLE_COLS = [
   },
   {
     key: "amount",
-    label: "Сумма",
+    label: "Ожид. сумма",
     num: true,
     get: d => d.amount,
     render(d) {
@@ -46,14 +46,6 @@ const DEALS_TABLE_COLS = [
     get: d => d.category,
     render(d) {
       return `<td>${categoryBadge(d.category)}</td>`;
-    },
-  },
-  {
-    key: "commit",
-    label: "Коммит",
-    get: d => d.commitLabel,
-    render(d) {
-      return `<td class="col-commit"><small>${escapeHtml(d.commitLabel || "—")}</small></td>`;
     },
   },
   {
