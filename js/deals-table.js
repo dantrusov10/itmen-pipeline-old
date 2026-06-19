@@ -386,11 +386,56 @@ function syncMultiselectFilter(colKey) {
   updateMultiselectToggleLabel(colKey);
 }
 
+const DEALS_MS_PANEL_W = 280;
+
+function resetDealsTableMultiselectPanel(wrap) {
+  const panel = wrap?.querySelector(".deals-ms-panel");
+  if (!panel) return;
+  panel.classList.remove("deals-ms-panel--table-fixed");
+  panel.style.position = "";
+  panel.style.left = "";
+  panel.style.top = "";
+  panel.style.width = "";
+  panel.style.zIndex = "";
+  panel.style.maxHeight = "";
+}
+
+function positionDealsTableMultiselect(wrap) {
+  const panel = wrap?.querySelector(".deals-ms-panel");
+  const toggle = wrap?.querySelector(".deals-ms-toggle");
+  if (!panel || !toggle || !wrap.closest("#deals-table")) return;
+
+  panel.classList.add("deals-ms-panel--table-fixed");
+  const rect = toggle.getBoundingClientRect();
+  const isRight = wrap.classList.contains("deals-ms-filter--right");
+  let left = isRight ? rect.right - DEALS_MS_PANEL_W : rect.left;
+  left = Math.max(8, Math.min(left, window.innerWidth - DEALS_MS_PANEL_W - 8));
+
+  const maxH = Math.min(280, window.innerHeight - 16);
+  let top = rect.bottom + 2;
+  if (top + maxH > window.innerHeight - 8 && rect.top - 2 - maxH >= 8) {
+    top = rect.top - 2 - maxH;
+  }
+
+  panel.style.position = "fixed";
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+  panel.style.width = `${DEALS_MS_PANEL_W}px`;
+  panel.style.zIndex = "500";
+  panel.style.maxHeight = `${maxH}px`;
+}
+
 function closeAllMultiselectPanels(except) {
   document.querySelectorAll(".deals-ms-filter.open").forEach(el => {
     if (except && el === except) return;
     el.classList.remove("open");
+    resetDealsTableMultiselectPanel(el);
   });
+}
+
+function repositionOpenDealsTableMultiselect() {
+  const open = document.querySelector("#deals-table .deals-ms-filter.open");
+  if (open) positionDealsTableMultiselect(open);
 }
 
 function clearAllDealsFilters() {
@@ -420,6 +465,8 @@ function bindDealsTableEvents() {
       const opening = !wrap.classList.contains("open");
       closeAllMultiselectPanels(opening ? wrap : null);
       wrap.classList.toggle("open", opening);
+      if (opening) positionDealsTableMultiselect(wrap);
+      else resetDealsTableMultiselectPanel(wrap);
       return;
     }
     const msClear = e.target.closest(".deals-ms-clear:not(.dash-ms-clear)");
@@ -500,6 +547,22 @@ function bindDealsTableEvents() {
       updateDealsTableBody(getEnrichedDeals());
     }
   });
+
+  if (!page.dataset.msScrollBound) {
+    page.dataset.msScrollBound = "1";
+    window.addEventListener("scroll", repositionOpenDealsTableMultiselect, true);
+    window.addEventListener("resize", () => {
+      syncDealsTableHeadHeight();
+      repositionOpenDealsTableMultiselect();
+    });
+  }
+}
+
+function syncDealsTableHeadHeight() {
+  const head = document.querySelector("#deals-table thead tr:first-child");
+  if (!head) return;
+  const h = head.getBoundingClientRect().height;
+  if (h > 0) document.documentElement.style.setProperty("--deals-head-h", `${h}px`);
 }
 
 function renderDealsTable(deals) {
@@ -534,4 +597,5 @@ function renderDealsTable(deals) {
 
   bindDealsTableEvents();
   updateDealsTableBody(deals);
+  requestAnimationFrame(syncDealsTableHeadHeight);
 }
