@@ -72,8 +72,11 @@ function doGet(e) {
         spreadsheetName: ss.getName()
       });
     }
-    if (action === 'audit') {
-      var limit = Math.min(Math.max(+(e.parameter.limit || 10), 1), 100);
+    if (action === 'audit' || action === 'auditAll') {
+      if (action === 'auditAll') {
+        return json_({ rows: readAllAuditRows_() });
+      }
+      var limit = Math.min(Math.max(+(e.parameter.limit || 10), 1), 5000);
       var auditSh = getAuditSheet_();
       var lastRow = auditSh.getLastRow();
       if (lastRow < 2) return json_({ rows: [] });
@@ -100,7 +103,7 @@ function doPost(e) {
   try {
     var body = JSON.parse(e.postData.contents);
     if (body.action === 'recoverFromAudit') {
-      return json_(recoverFromAudit_(!!body.apply));
+      return json_(recoverFromAudit_(!!body.apply, body.mode || 'lost'));
     }
     if (body.action === 'save') {
       if (!body.state || !Array.isArray(body.state.deals)) {
@@ -531,7 +534,89 @@ function applyAuditFieldToDeal_(deal, label, rawValue) {
   return true;
 }
 
-function recoverFromAudit_(apply) {
+function isEmptyAuditField_(label, raw) {
+  if (raw === null || raw === undefined) return true;
+  var s = String(raw).trim();
+  if (!s) return true;
+  if (label === 'Статус бюджета' && s === 'Неизвестно') return true;
+  if (label === 'Статус коммита' && (s === 'none' || s === 'Нет подтверждения')) return true;
+  if (label === 'Срок бюджета' && s === 'Не определён') return true;
+  if (label === 'Ключевые боли' && s.length < 5) return true;
+  if (label === 'Скоринг') {
+    try {
+      var sc = JSON.parse(s);
+      var sum = 0;
+      var k;
+      for (k in sc) if (sc.hasOwnProperty(k)) sum += (sc[k] || 0);
+      return sum <= 2;
+    } catch (e) { return true; }
+  }
+  if (label === 'Риски' || label === 'Что ищут') return s.length < 2;
+  if (label === 'Что есть сейчас' || label === 'Почему меняют' || label === 'Конкуренты') {
+    return s === '{}' || s === '';
+  }
+  return false;
+}
+
+function formatDealFieldForAudit_(deal, label) {
+  var key = LABEL_TO_KEY_[label];
+  if (!key) return '';
+  if (TECH_AUDIT_KEYS_[key]) {
+    return formatAuditValue_(key, (deal.techResearch || {})[key]);
+  }
+  if (key === 'riskTypes') {
+    return formatAuditValue_('riskTypes', normalizeRiskTypes_(deal));
+  }
+  if (key === 'scores') {
+    return JSON.stringify(deal.scores || {});
+  }
+  return formatAuditValue_(key, deal[key]);
+}
+
+function buildLostRecoverPlan_(rows, dealMap) {
+  var timeline = {};
+  var i, row, dealId, label, k, vals, lastGood, j, finalAudit, wasWiped, deal, currentFmt;
+  for (i = 0; i < rows.length; i++) {
+    row = rows[i];
+    dealId = String(row[2] || '');
+    label = String(row[6] || '');
+    if (!dealId || !label || label === '—') continue;
+    k = dealId + '\t' + label;
+    if (!timeline[k]) timeline[k] = [];
+    timeline[k].push(row[8]);
+  }
+  var plan = [];
+  for (k in timeline) {
+    if (!timeline.hasOwnProperty(k)) continue;
+    vals = timeline[k];
+    dealId = k.split('\t')[0];
+    label = k.split('\t')[1];
+    lastGood = null;
+    for (j = 0; j < vals.length; j++) {
+      if (!isEmptyAuditField_(label, vals[j])) lastGood = vals[j];
+    }
+    if (!lastGood) continue;
+    finalAudit = vals[vals.length - 1];
+    wasWiped = isEmptyAuditField_(label, finalAudit) && !isEmptyAuditField_(label, lastGood);
+    deal = dealMap[dealId];
+    if (!deal) continue;
+    currentFmt = formatDealFieldForAudit_(deal, label);
+    if (currentFmt === String(lastGood)) continue;
+    if (wasWiped || (isEmptyAuditField_(label, currentFmt) && !isEmptyAuditField_(label, lastGood))) {
+      plan.push({
+        dealId: dealId,
+        customer: deal.customer || '',
+        label: label,
+        value: lastGood,
+        reason: wasWiped ? 'wiped_in_audit' : 'empty_on_server'
+      });
+    }
+  }
+  return plan;
+}
+
+function recoverFromAudit_(apply, mode) {
+  mode = mode || 'lost';
   var rows = readAllAuditRows_();
   var current = loadState_() || { deals: [] };
   var dealMap = {};
@@ -540,16 +625,25 @@ function recoverFromAudit_(apply) {
   });
 
   var patches = 0;
-  rows.forEach(function (row) {
-    var dealId = String(row[2] || '');
-    var label = String(row[6] || '');
-    var newVal = row[8];
-    if (!dealId || !label || label === '—') return;
-    if (!dealMap[dealId]) {
-      dealMap[dealId] = { id: dealId, customer: String(row[3] || ''), owner: String(row[5] || '') };
-    }
-    if (applyAuditFieldToDeal_(dealMap[dealId], label, newVal)) patches++;
-  });
+  var plan = [];
+
+  if (mode === 'lost') {
+    plan = buildLostRecoverPlan_(rows, dealMap);
+    plan.forEach(function (p) {
+      if (applyAuditFieldToDeal_(dealMap[p.dealId], p.label, p.value)) patches++;
+    });
+  } else {
+    rows.forEach(function (row) {
+      var dealId = String(row[2] || '');
+      var label = String(row[6] || '');
+      var newVal = row[8];
+      if (!dealId || !label || label === '—') return;
+      if (!dealMap[dealId]) {
+        dealMap[dealId] = { id: dealId, customer: String(row[3] || ''), owner: String(row[5] || '') };
+      }
+      if (applyAuditFieldToDeal_(dealMap[dealId], label, newVal)) patches++;
+    });
+  }
 
   var recovered = JSON.parse(JSON.stringify(current));
   recovered.deals = current.deals.map(function (d) {
@@ -559,12 +653,14 @@ function recoverFromAudit_(apply) {
   var diffRows = diffPipeline_(current, recovered);
   if (apply) {
     getAuditSheet_();
-    appendAudit_( 'recover', diffRows);
+    appendAudit_('recover', diffRows);
     var updatedAt = saveState_(recovered);
     return {
       ok: true,
       applied: true,
+      mode: mode,
       patches: patches,
+      plan: plan,
       auditRows: diffRows.length,
       changes: diffRows.length,
       updatedAt: updatedAt,
@@ -574,9 +670,11 @@ function recoverFromAudit_(apply) {
   return {
     ok: true,
     applied: false,
+    mode: mode,
     patches: patches,
+    plan: plan,
     changes: diffRows.length,
-    preview: diffRows.slice(0, 30)
+    preview: diffRows.slice(0, 40)
   };
 }
 
