@@ -123,7 +123,20 @@ function doPost(e) {
     if (body.action === 'recoverFromAudit') {
       return json_(recoverFromAudit_(!!body.apply, body.mode || 'lost'));
     }
+    if (body.action === 'rollbackAuditBurst') {
+      return json_(rollbackAuditBurst_(String(body.at || ''), !!body.apply));
+    }
+    if (body.action === 'setMaintenance') {
+      var on = !!body.on;
+      if (on) PropertiesService.getScriptProperties().setProperty('MAINTENANCE_MODE', '1');
+      else PropertiesService.getScriptProperties().deleteProperty('MAINTENANCE_MODE');
+      return json_({ ok: true, maintenanceMode: on });
+    }
     if (body.action === 'save') {
+      var maint = PropertiesService.getScriptProperties().getProperty('MAINTENANCE_MODE');
+      if (maint === '1' && !body.allowMaintenance) {
+        return json_({ error: 'Сохранение временно заблокировано (режим восстановления). Закройте все вкладки пайплайна и повторите загрузку с сервера.' });
+      }
       if (!body.state || !Array.isArray(body.state.deals)) {
         return json_({ error: 'Некорректное тело запроса' });
       }
@@ -826,6 +839,66 @@ function recoverSelective_(apply, approvedKeys) {
       skipDealsWithScoreGte: SELECTIVE_MIN_SCORE_SKIP_,
       onlyEmptyFields: true
     }
+  };
+}
+
+function parseAuditTimestamp_(raw) {
+  if (!raw) return '';
+  var s = String(raw);
+  if (s.indexOf('T') >= 0) return s.substring(0, 19);
+  return s.substring(0, 19).replace(' ', 'T');
+}
+
+function rollbackAuditBurst_(atPrefix, apply) {
+  atPrefix = String(atPrefix || '').trim();
+  if (!atPrefix) return { error: 'at required (e.g. 2026-06-24T10:38:47)' };
+
+  var rows = readAllAuditRows_();
+  var burst = rows.filter(function (row) {
+    return parseAuditTimestamp_(row[0]).indexOf(atPrefix) === 0;
+  });
+  if (!burst.length) return { error: 'No audit rows for ' + atPrefix };
+
+  var current = loadState_() || { deals: [] };
+  var dealMap = {};
+  current.deals.forEach(function (d) {
+    if (d && d.id) dealMap[d.id] = cloneDeal_(d);
+  });
+
+  var plan = [];
+  var patches = 0;
+  burst.forEach(function (row) {
+    var dealId = String(row[2] || '');
+    var label = String(row[6] || '');
+    var oldVal = row[7];
+    if (!dealId || !label || label === '—') return;
+    if (!dealMap[dealId]) return;
+    plan.push({ dealId: dealId, customer: dealMap[dealId].customer || '', label: label, value: oldVal });
+    if (apply && applyAuditFieldToDeal_(dealMap[dealId], label, oldVal)) patches++;
+  });
+
+  if (!apply) {
+    return { ok: true, applied: false, at: atPrefix, burstRows: burst.length, planCount: plan.length, plan: plan.slice(0, 50) };
+  }
+
+  PropertiesService.getScriptProperties().setProperty('MAINTENANCE_MODE', '1');
+  var recovered = JSON.parse(JSON.stringify(current));
+  recovered.deals = current.deals.map(function (d) {
+    return dealMap[d.id] ? dealMap[d.id] : d;
+  });
+  var diffRows = diffPipeline_(current, recovered);
+  appendAudit_('rollback-' + atPrefix, diffRows);
+  var updatedAt = saveState_(recovered);
+  invalidatePipelineCache_();
+  return {
+    ok: true,
+    applied: true,
+    at: atPrefix,
+    burstRows: burst.length,
+    patches: patches,
+    auditRows: diffRows.length,
+    updatedAt: updatedAt,
+    maintenanceMode: true
   };
 }
 
