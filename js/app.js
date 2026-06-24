@@ -289,13 +289,24 @@ async function syncPipelineFromServer() {
     const cached = state;
     const lite = await apiLoadPipeline({ lite: true });
     if (!lite) throw new Error("Пустой ответ сервера");
-    const merged = mergeLiteState(cached, lite);
-    const changed = isServerNewer(merged, cached);
-    state = merged;
+    const localCount = (cached?.deals || []).length;
+    const serverCount = (lite?.deals || []).length;
+    const replaced = shouldReplaceLocalWithServer(cached, lite);
+    state = replaced ? replaceStateFromServer(lite) : mergeLiteState(cached, lite);
+    const changed = replaced || isServerNewer(state, cached);
     persistStateCache(state);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
     invalidateMetricsCache();
     renderAll();
-    if (changed) {
+    if (replaced) {
+      showSyncBanner(
+        `✓ Загружено с сервера: ${serverCount} сделок (в браузере было ${localCount}). ` +
+        `<button type="button" class="btn btn-sm" id="force-reload-btn">Полная перезагрузка</button>`,
+        "ok"
+      );
+      document.getElementById("force-reload-btn")?.addEventListener("click", () => forceReloadFromServer());
+      setTimeout(clearSyncBanner, 8000);
+    } else if (changed) {
       showSyncBanner("✓ Данные обновлены с сервера", "ok");
       setTimeout(clearSyncBanner, 2500);
     } else {
@@ -304,10 +315,40 @@ async function syncPipelineFromServer() {
   } catch (e) {
     console.error(e);
     showSyncBanner(
-      `⚠ Не удалось обновить с сервера: ${escapeHtml(e.message || "ошибка")}. Показана локальная копия. <button type="button" class="btn btn-sm" id="retry-load-btn">Повторить</button>`,
+      `⚠ Не удалось обновить с сервера: ${escapeHtml(e.message || "ошибка")}. Показана локальная копия (${(state?.deals || []).length} сделок). ` +
+      `<button type="button" class="btn btn-sm" id="retry-load-btn">Повторить</button> ` +
+      `<button type="button" class="btn btn-sm" id="force-reload-btn">Загрузить с сервера</button>`,
       "error"
     );
     document.getElementById("retry-load-btn")?.addEventListener("click", () => syncPipelineFromServer());
+    document.getElementById("force-reload-btn")?.addEventListener("click", () => forceReloadFromServer());
+  }
+}
+
+async function forceReloadFromServer() {
+  if (!window.ITMEN_API?.enabled) {
+    alert("Сервер не подключён. Проверьте js/gas-config.js");
+    return;
+  }
+  try {
+    showSyncBanner("⟳ Полная загрузка с сервера…", "sync");
+    const loaded = await apiLoadPipeline({ lite: false });
+    if (!loaded?.deals?.length) throw new Error("Сервер вернул пустой пайплайн");
+    state = migrateState(loaded);
+    persistStateCache(state);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch (_) {}
+    invalidateMetricsCache();
+    renderAll();
+    showSyncBanner(`✓ Загружено ${state.deals.length} сделок с сервера`, "ok");
+    setTimeout(clearSyncBanner, 4000);
+  } catch (e) {
+    console.error(e);
+    showSyncBanner(
+      `⚠ Ошибка загрузки: ${escapeHtml(e.message || "ошибка")}. ` +
+      `<button type="button" class="btn btn-sm" id="force-reload-btn">Повторить</button>`,
+      "error"
+    );
+    document.getElementById("force-reload-btn")?.addEventListener("click", () => forceReloadFromServer());
   }
 }
 
@@ -361,6 +402,22 @@ async function saveState(meta = {}) {
   saveInFlight = (async () => {
     if (window.ITMEN_API?.enabled) {
       try {
+        if (meta.forceFull) {
+          const localCount = (state.deals || []).length;
+          let serverCount = 0;
+          try {
+            const serverLite = await apiLoadPipeline({ lite: true });
+            serverCount = (serverLite?.deals || []).length;
+          } catch (_) {}
+          if (serverCount >= 10 && localCount < serverCount * 0.5) {
+            const ok = confirm(
+              `Опасное сохранение: на сервере ${serverCount} сделок, у вас в браузере ${localCount}.\n\n` +
+              "Полная перезапись удалит остальные сделки на сервере.\n\n" +
+              "Нажмите «Отмена» и используйте «Загрузить с сервера», либо «ОК» только если уверены."
+            );
+            if (!ok) throw new Error("Сохранение отменено — загрузите данные с сервера");
+          }
+        }
         const res = await apiSavePipeline(state, {
           editedDealIds: meta.editedDealIds || [],
           deletedDealIds: meta.deletedDealIds || [],

@@ -80,6 +80,20 @@ function isServerNewer(serverState, localState) {
   return new Date(a).getTime() > new Date(b).getTime();
 }
 
+/** Локальная копия явно устарела (типичный сбой: в браузере 3 сделки, на сервере 200+) */
+function shouldReplaceLocalWithServer(localState, serverState) {
+  const localCount = (localState?.deals || []).length;
+  const serverCount = (serverState?.deals || []).length;
+  if (!serverCount) return false;
+  if (!localCount) return true;
+  if (serverCount >= 10 && localCount < serverCount * 0.5) return true;
+  return false;
+}
+
+function replaceStateFromServer(serverState) {
+  return migrateState(serverState);
+}
+
 function showSyncBanner(message, kind) {
   let bar = document.getElementById("sync-banner");
   if (!bar) {

@@ -135,6 +135,14 @@ function doPost(e) {
       var mergeResult;
       var mergedState;
       if (body.forceFull) {
+        var oldCount = (oldState && oldState.deals) ? oldState.deals.length : 0;
+        var newCount = body.state.deals.length;
+        if (oldCount >= 10 && newCount < Math.max(5, Math.floor(oldCount * 0.5))) {
+          return json_({
+            error: 'Отклонено: в сохранении слишком мало сделок (' + newCount + ' из ' + oldCount + ' на сервере). ' +
+              'Загрузите актуальные данные с сервера или используйте обычное сохранение без forceFull.'
+          });
+        }
         mergedState = body.state;
         mergeResult = { conflicts: [], keptServer: 0, tookClient: 0 };
       } else {
