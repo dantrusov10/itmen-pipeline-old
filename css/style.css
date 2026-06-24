@@ -179,6 +179,37 @@ body.page-deals-active .topbar h2 { font-size: 1.05rem; }
 .metric-card .label { font-size: .78rem; color: var(--muted); margin-bottom: .25rem; }
 .metric-card .value { font-size: 1.5rem; font-weight: 700; color: var(--navy); }
 .metric-card .sub { font-size: .72rem; color: var(--muted); margin-top: .2rem; }
+.metric-card--drill,
+.dash-drill-row { cursor: pointer; transition: background .12s, box-shadow .12s, transform .08s; }
+.metric-card--drill:hover {
+  box-shadow: 0 2px 10px rgba(44, 82, 130, .12);
+  transform: translateY(-1px);
+}
+.dash-table tbody tr.dash-drill-row:hover,
+.dash-drill-row.funnel-row:hover,
+.cat-bar-row.dash-drill-row:hover {
+  background: #eff6ff;
+}
+.deals-filter-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .35rem .5rem;
+  align-items: center;
+  margin: 0 0 .75rem;
+  padding: .5rem .75rem;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  font-size: .82rem;
+}
+.deals-filter-banner-label { color: var(--muted); }
+.deals-filter-tag {
+  display: inline-block;
+  padding: .1rem .45rem;
+  background: #fff;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+}
 
 .badge {
   display: inline-block;

@@ -222,6 +222,9 @@ function matchColFilter(col, d) {
 
 function applyDealsTableFilters(deals) {
   let rows = deals;
+  if (typeof applyPresetFilter === "function" && dealsTablePreset) {
+    rows = applyPresetFilter(rows, dealsTablePreset);
+  }
   for (const col of DEALS_TABLE_COLS) {
     if (col.filter === "range") {
       if (dealsTableColFilters[col.key + "__from"] || dealsTableColFilters[col.key + "__to"]) {
@@ -440,6 +443,7 @@ function repositionOpenDealsTableMultiselect() {
 
 function clearAllDealsFilters() {
   dealsTableColFilters = {};
+  dealsTablePreset = null;
   dealsTableSearch = "";
   const gs = document.getElementById("deals-global-search");
   if (gs) gs.value = "";
@@ -514,7 +518,15 @@ function bindDealsTableEvents() {
 
     if (e.target.id === "deals-clear-filters") {
       clearAllDealsFilters();
+      if (typeof updateDealsReportHash === "function") {
+        updateDealsReportHash(buildDealsReportSpec({}, null));
+      }
       updateDealsTableBody(getEnrichedDeals());
+      renderDealsFilterBanner();
+      return;
+    }
+    if (e.target.id === "deals-copy-link") {
+      copyDealsReportLink();
       return;
     }
     const row = e.target.closest("#deals-tbody tr.deals-row-clickable");
@@ -528,23 +540,34 @@ function bindDealsTableEvents() {
     if (e.target.id === "deals-global-search") {
       dealsTableSearch = e.target.value;
       updateDealsTableBody(getEnrichedDeals());
+      syncDealsReportHashFromTable();
+      renderDealsFilterBanner();
       return;
     }
     if (e.target.classList.contains("deals-col-filter")) {
       setColFilterFromInput(e.target);
+      dealsTablePreset = null;
       updateDealsTableBody(getEnrichedDeals());
+      syncDealsReportHashFromTable();
+      renderDealsFilterBanner();
     }
   });
 
   page.addEventListener("change", e => {
     if (e.target.classList.contains("deals-ms-cb") && e.target.dataset.col) {
       syncMultiselectFilter(e.target.dataset.col);
+      dealsTablePreset = null;
       updateDealsTableBody(getEnrichedDeals());
+      syncDealsReportHashFromTable();
+      renderDealsFilterBanner();
       return;
     }
     if (e.target.classList.contains("deals-col-filter") && e.target.tagName === "SELECT") {
       setColFilterFromInput(e.target);
+      dealsTablePreset = null;
       updateDealsTableBody(getEnrichedDeals());
+      syncDealsReportHashFromTable();
+      renderDealsFilterBanner();
     }
   });
 
@@ -565,6 +588,24 @@ function syncDealsTableHeadHeight() {
   if (h > 0) document.documentElement.style.setProperty("--deals-head-h", `${h}px`);
 }
 
+function syncDealsReportHashFromTable() {
+  if (typeof updateDealsReportHash !== "function") return;
+  updateDealsReportHash(buildDealsReportSpec(dealsTableColFilters, dealsTablePreset));
+}
+
+function renderDealsFilterBanner() {
+  const el = document.getElementById("deals-filter-banner");
+  if (!el || typeof getDealsReportFilterSummary !== "function") return;
+  const parts = getDealsReportFilterSummary();
+  if (!parts.length) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = `<span class="deals-filter-banner-label">Активный срез:</span> ${parts.map(p => `<span class="deals-filter-tag">${escapeHtml(p)}</span>`).join(" ")}`;
+}
+
 function renderDealsTable(deals) {
   const el = document.getElementById("page-deals");
   if (!el) return;
@@ -574,8 +615,10 @@ function renderDealsTable(deals) {
       <label class="btn" style="cursor:pointer">⬆️ Excel<input type="file" id="btn-import-excel" accept=".xlsx,.xls" hidden></label>
       <input type="search" id="deals-global-search" class="deals-global-search" placeholder="Быстрый поиск…" value="${escapeHtml(dealsTableSearch)}">
       <button type="button" class="btn btn-sm" id="deals-clear-filters">Сбросить фильтры</button>
+      <button type="button" class="btn btn-sm" id="deals-copy-link" title="Скопировать ссылку с фильтрами">🔗 Поделиться</button>
       <span class="deals-table-meta" id="deals-table-meta"></span>
     </div>
+    <div class="deals-filter-banner" id="deals-filter-banner" hidden></div>
     <p class="deals-table-hint muted">Балл (0–100): взвешенная сумма 9 критериев скоринга в паспорте (шкала 0–5 у каждого), формула (Σ оценка×вес) / 5 × 100. Категория: ≥80 горячая, ≥60 тёплая, ≥40 наблюдение, &lt;40 отказ.</p>
     <div class="deals-table-shell">
       <table class="deals-table deals-table-compact" id="deals-table">
@@ -596,6 +639,8 @@ function renderDealsTable(deals) {
   });
 
   bindDealsTableEvents();
+  if (typeof syncDealsReportFiltersToUI === "function") syncDealsReportFiltersToUI();
   updateDealsTableBody(deals);
+  renderDealsFilterBanner();
   requestAnimationFrame(syncDealsTableHeadHeight);
 }

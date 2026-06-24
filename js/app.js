@@ -193,6 +193,12 @@ function bindDashboardEvents() {
       return;
     }
     if (!e.target.closest(".dash-ms-filter")) closeDashMultiselectPanels();
+
+    const drill = e.target.closest(".dash-drill-row, .metric-card--drill");
+    if (drill) {
+      e.preventDefault();
+      openDealsReport(withDashboardFilters(drillSpecFromElement(drill)));
+    }
   });
 }
 
@@ -316,7 +322,7 @@ function showToast(msg) {
   setTimeout(() => t.classList.remove("show"), 2200);
 }
 
-function navigate(page) {
+function navigate(page, reportSpec) {
   activePage = page;
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   document.querySelectorAll(".nav a").forEach(a => a.classList.remove("active"));
@@ -324,14 +330,24 @@ function navigate(page) {
   document.querySelector(`.nav a[data-page="${page}"]`)?.classList.add("active");
   document.getElementById("page-title").textContent = PAGES[page]?.title || page;
   document.body.classList.toggle("page-deals-active", page === "deals");
-  location.hash = page;
   document.getElementById("sidebar")?.classList.remove("open");
+  if (page === "deals") {
+    if (reportSpec) applyDealsReportSpec(reportSpec);
+    else applyDealsReportSpec(null);
+    location.hash = reportSpec ? serializeDealsReportSpec(reportSpec) : "deals";
+  } else {
+    location.hash = page;
+  }
   renderActivePage();
 }
 
 function renderActivePage() {
   if (activePage === "panel") renderPanel(getDashboardMetrics());
-  else if (activePage === "deals") renderDealsTable(getEnrichedDeals());
+  else if (activePage === "deals") {
+    renderDealsTable(getEnrichedDeals());
+    if (typeof syncDealsReportFiltersToUI === "function") syncDealsReportFiltersToUI();
+    if (typeof renderDealsFilterBanner === "function") renderDealsFilterBanner();
+  }
   else if (activePage === "scoring") renderScoring();
 }
 
@@ -341,7 +357,26 @@ function renderAll() {
 }
 
 function metricCard(label, value, sub) {
-  return `<div class="metric-card"><div class="label">${label}</div><div class="value">${value}</div>${sub ? `<div class="sub">${sub}</div>` : ""}</div>`;
+  return metricCardDrill(label, value, sub, "");
+}
+
+function withDashboardFilters(spec) {
+  const filters = { ...(spec.filters || {}) };
+  if (dashboardFilters.owner?.length) filters.owner = [...dashboardFilters.owner];
+  if (dashboardFilters.category?.length) filters.category = [...dashboardFilters.category];
+  if (dashboardFilters.budgetPeriod?.length) filters.budgetPeriod = [...dashboardFilters.budgetPeriod];
+  if (dashboardFilters.stage?.length) filters.stage = [...dashboardFilters.stage];
+  return buildDealsReportSpec(filters, spec.preset);
+}
+
+function dashDrill(spec) {
+  return drillRowAttrs(withDashboardFilters(spec));
+}
+
+function strongCommitLabels() {
+  return (window.ITMEN_CONFIG?.commitStatuses || [])
+    .filter(c => ["protocol", "loi", "guarantee", "contract"].includes(c.id))
+    .map(c => c.label);
 }
 
 function renderPanel(m) {
@@ -369,29 +404,35 @@ function renderPanel(m) {
       ${dashFiltersActive() ? `<button type="button" class="btn btn-sm" id="dash-clear-filters">Сбросить фильтры</button>` : ""}
     </div>
     <div class="grid grid-4" style="margin-bottom:1rem">
-      ${metricCard("Сделок в пайплайне", n)}
-      ${metricCard("Общий пайплайн", formatMoney(m.totalPipeline), "сумма ожидаемых сумм")}
-      ${metricCard("Взвешенный прогноз", formatMoney(m.weighted), "тёплые + горячие (балл ≥ 60)")}
-      ${metricCard("Подтв. бюджет", m.confirmedBudget, formatMoney(m.confirmedBudgetSum))}
+      ${metricCardDrill("Сделок в пайплайне", n, "в текущем срезе", dashDrill(buildDealsReportSpec({}, null)))}
+      ${metricCardDrill("Общий пайплайн", formatMoney(m.totalPipeline), "сумма ожидаемых сумм", dashDrill(buildDealsReportSpec({}, null)))}
+      ${metricCardDrill("Взвешенный прогноз", formatMoney(m.weighted), "тёплые + горячие (балл ≥ 60)", dashDrill(buildDealsReportSpec({ category: ["Горячая", "Тёплая"], score__from: "60" })))}
+      ${metricCardDrill("Подтв. бюджет", m.confirmedBudget, formatMoney(m.confirmedBudgetSum), dashDrill(buildDealsReportSpec({ budgetStatus: ["Подтверждён"] })))}
     </div>
     <div class="grid grid-4" style="margin-bottom:1rem">
-      ${metricCard("Горячие", m.counts["Горячая"] || 0, `${n ? Math.round((m.counts["Горячая"]||0)/n*100) : 0}%`)}
-      ${metricCard("Тёплые", m.counts["Тёплая"] || 0)}
-      ${metricCard("На пилоте", m.inPilot || 0, "стадии пилота")}
-      ${metricCard("Тех. соответствие", m.avgProductPct != null ? m.avgProductPct + "%" : "—", m.avgPilotPct != null ? `пилот ${m.avgPilotPct}%` : "")}
+      ${metricCardDrill("Горячие", m.counts["Горячая"] || 0, `${n ? Math.round((m.counts["Горячая"]||0)/n*100) : 0}%`, dashDrill(buildDealsReportSpec({ category: ["Горячая"] })))}
+      ${metricCardDrill("Тёплые", m.counts["Тёплая"] || 0, "", dashDrill(buildDealsReportSpec({ category: ["Тёплая"] })))}
+      ${metricCardDrill("На пилоте", m.inPilot || 0, "стадии пилота", dashDrill(buildDealsReportSpec({}, { type: "pilot" })))}
+      ${metricCardDrill("Тех. соответствие", m.avgProductPct != null ? m.avgProductPct + "%" : "—", m.avgPilotPct != null ? `пилот ${m.avgPilotPct}%` : "", "")}
+    </div>
+    <div class="grid grid-4" style="margin-bottom:1rem">
+      ${metricCardDrill("Неполные паспорта", m.incomplete, "требуют данных", dashDrill(buildDealsReportSpec({}, { type: "incomplete" })))}
+      ${metricCardDrill("Флаги риска", m.riskFlags, "критичные", dashDrill(buildDealsReportSpec({}, { type: "risk" })))}
+      ${metricCardDrill("Ср. лояльность", m.avgLoyalty != null ? m.avgLoyalty + " / 5" : "—", m.highLoyalty ? `высокая (≥4): ${m.highLoyalty}` : "оценка в паспорте", dashDrill(buildDealsReportSpec({ score__from: "1" })))}
+      ${metricCardDrill("Наблюдение / Отказ", (m.counts["Наблюдение"]||0) + (m.counts["Отказ"]||0), "", dashDrill(buildDealsReportSpec({ category: ["Наблюдение", "Отказ"] })))}
     </div>
     <div class="grid grid-4" style="margin-bottom:1.5rem">
-      ${metricCard("Неполные паспорта", m.incomplete, "требуют данных")}
-      ${metricCard("Флаги риска", m.riskFlags, "критичные")}
-      ${metricCard("Ср. лояльность", m.avgLoyalty != null ? m.avgLoyalty + " / 5" : "—", m.highLoyalty ? `высокая (≥4): ${m.highLoyalty}` : "оценка в паспорте")}
-      ${metricCard("Наблюдение / Отказ", (m.counts["Наблюдение"]||0) + (m.counts["Отказ"]||0))}
+      ${metricCardDrill("Средний балл", m.avgScore ?? "—", "по сделкам в срезе", dashDrill(buildDealsReportSpec({ score__from: "1" })))}
+      ${metricCardDrill("Полнота паспортов", m.passportCompleteness != null ? Math.round(m.passportCompleteness * 100) + "%" : "—", `${n - m.incomplete} из ${n} заполнены`, dashDrill(buildDealsReportSpec({}, { type: "incomplete" })))}
+      ${metricCardDrill("Сильные коммиты", m.strongCommits || 0, "протокол / LOI / гарантия / контракт", dashDrill(buildDealsReportSpec({ commitStatus: strongCommitLabels() })))}
+      ${metricCardDrill("Доля горячих", n ? Math.round((m.hotShare || 0) * 100) + "%" : "—", `${m.counts["Горячая"] || 0} из ${n}`, dashDrill(buildDealsReportSpec({ category: ["Горячая"] })))}
     </div>
 
     <div class="section-title">Распределение по категориям</div>
     <div class="category-bars" style="margin-bottom:1.5rem">
       ${["Горячая", "Тёплая", "Наблюдение", "Отказ"].map(cat => {
         const c = m.counts[cat] || 0;
-        return `<div class="cat-bar-row">
+        return `<div class="cat-bar-row dash-drill-row" ${dashDrill(buildDealsReportSpec({ category: [cat] }))} title="Открыть список сделок">
           <span class="name">${cat}</span>
           <div class="bar-wrap"><div class="bar" style="width:${(c/catTotal)*100}%;background:${catColors[cat]}"></div></div>
           <span class="count">${c}</span>
@@ -406,7 +447,7 @@ function renderPanel(m) {
         <div class="card-body">
           <div class="funnel">
             ${(m.byBudgetPeriod || []).map(({ period, count, pipeline }) => `
-              <div class="funnel-row">
+              <div class="funnel-row dash-drill-row" ${dashDrill(buildDealsReportSpec({ budgetPeriod: [period] }))} title="Открыть список сделок">
                 <span class="name" title="${escapeHtml(period)}">${escapeHtml(period.length > 22 ? period.slice(0, 20) + "…" : period)}</span>
                 <div class="bar-wrap"><div class="bar" style="width:${(count / maxPeriod) * 100}%;background:#805ad5"></div></div>
                 <span class="count">${count}</span>
@@ -420,7 +461,7 @@ function renderPanel(m) {
         <div class="card-body">
           <div class="funnel">
             ${Object.entries(m.commitCounts).map(([name, count]) => `
-              <div class="funnel-row">
+              <div class="funnel-row dash-drill-row" ${dashDrill(buildDealsReportSpec({ commitStatus: [commitShortToLabel(name)] }))} title="Открыть список сделок">
                 <span class="name">${escapeHtml(name)}</span>
                 <div class="bar-wrap"><div class="bar" style="width:${(count / maxCommit) * 100}%"></div></div>
                 <span class="count">${count}</span>
@@ -436,7 +477,7 @@ function renderPanel(m) {
         <div class="card-body table-wrap">
           <table class="dash-table">
             <thead><tr><th>Менеджер</th><th>Сделок</th><th>Пайплайн</th><th>Взвеш.</th><th>Гор./Тёпл.</th><th>Балл</th></tr></thead>
-            <tbody>${ownerRows.map(([name, v]) => `<tr>
+            <tbody>${ownerRows.map(([name, v]) => `<tr class="dash-drill-row" ${dashDrill(buildDealsReportSpec({ owner: [name] }))} title="Открыть сделки менеджера">
               <td>${escapeHtml(name)}</td><td>${v.count}</td>
               <td class="num">${formatMoney(v.pipeline)}</td>
               <td class="num">${formatMoney(v.weighted)}</td>
@@ -452,7 +493,7 @@ function renderPanel(m) {
         <div class="card-body">
           <div class="funnel">
             ${(m.stageFunnel || []).map(({ stage, count }) => `
-              <div class="funnel-row">
+              <div class="funnel-row dash-drill-row" ${dashDrill(buildDealsReportSpec({ stage: [stage] }))} title="Открыть список сделок">
                 <span class="name" title="${escapeHtml(stage)}">${escapeHtml(stage.length > 22 ? stage.slice(0, 20) + "…" : stage)}</span>
                 <div class="bar-wrap"><div class="bar" style="width:${(count / maxStage) * 100}%;background:#2c5282"></div></div>
                 <span class="count">${count}</span>
@@ -468,7 +509,7 @@ function renderPanel(m) {
         <div class="card-body table-wrap">
           <table class="dash-table">
             <thead><tr><th>Статус</th><th>Сделок</th><th>Сумма пайплайна</th></tr></thead>
-            <tbody>${budgetRows.map(([st, v]) => `<tr>
+            <tbody>${budgetRows.map(([st, v]) => `<tr class="dash-drill-row" ${dashDrill(buildDealsReportSpec({ budgetStatus: [st] }))} title="Открыть список сделок">
               <td>${escapeHtml(st)}</td><td>${v.count}</td><td class="num">${formatMoney(v.pipeline)}</td>
             </tr>`).join("") || "<tr><td colspan='3' class='muted'>—</td></tr>"}
             </tbody>
@@ -480,7 +521,7 @@ function renderPanel(m) {
         <div class="card-body">
           <div class="funnel">
             ${(m.topSegments || []).map(([seg, count]) => `
-              <div class="funnel-row">
+              <div class="funnel-row dash-drill-row" ${dashDrill(buildDealsReportSpec({}, { type: "segment", value: seg }))} title="Открыть список сделок">
                 <span class="name">${escapeHtml(seg)}</span>
                 <div class="bar-wrap"><div class="bar" style="width:${(count / Math.max(1, m.topSegments[0]?.[1] || 1)) * 100}%;background:#38a169"></div></div>
                 <span class="count">${count}</span>
@@ -495,7 +536,7 @@ function renderPanel(m) {
       <div class="card-body table-wrap">
         <table class="dash-table">
           <thead><tr><th>Клиент</th><th>Владелец</th><th>Стадия</th><th>Ожид. сумма</th><th>Взвеш.</th><th>Балл</th><th>Категория</th></tr></thead>
-          <tbody>${(m.topDeals || []).map(d => `<tr>
+          <tbody>${(m.topDeals || []).map(d => `<tr class="dash-drill-row" ${dashDrill(buildDealsReportSpec({ customer: d.customer }))} title="Открыть в таблице">
             <td><strong>${escapeHtml(d.customer)}</strong></td>
             <td>${escapeHtml(d.owner)}</td>
             <td><small>${escapeHtml(d.stage)}</small></td>
@@ -511,7 +552,10 @@ function renderPanel(m) {
 
     ${(m.attention || []).length ? `
     <div class="card" style="margin-bottom:1.5rem">
-      <div class="card-header">⚠ Требуют внимания</div>
+      <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:.75rem">
+        <span>⚠ Требуют внимания</span>
+        <button type="button" class="btn btn-sm dash-drill-row" ${dashDrill(buildDealsReportSpec({}, { type: "attention" }))}>Показать все →</button>
+      </div>
       <div class="card-body table-wrap">
         <table class="dash-table">
           <thead><tr><th>Клиент</th><th>Владелец</th><th>Проблема</th><th>Задача до</th><th></th></tr></thead>
@@ -1041,7 +1085,19 @@ document.addEventListener("DOMContentLoaded", async () => {
   bindDashboardEvents();
   if (typeof bindDealsTableEvents === "function") bindDealsTableEvents();
   renderAll();
-  navigate(location.hash.replace("#", "") || "panel");
+  const boot = parseLocationHash();
+  navigate(boot.page || "panel", boot.spec);
+  window.addEventListener("hashchange", () => {
+    const p = parseLocationHash();
+    if (p.page === "deals" && activePage === "deals") {
+      applyDealsReportSpec(p.spec);
+      if (typeof syncDealsReportFiltersToUI === "function") syncDealsReportFiltersToUI();
+      updateDealsTableBody(getEnrichedDeals());
+      if (typeof renderDealsFilterBanner === "function") renderDealsFilterBanner();
+      return;
+    }
+    if (p.page !== activePage) navigate(p.page, p.spec);
+  });
 });
 window.openDealModal = openDealModal;
 window.saveDealModal = saveDealModal;
