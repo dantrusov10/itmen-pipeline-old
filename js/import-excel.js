@@ -107,6 +107,9 @@ function importExcelFile(file) {
 }
 
 async function importExcelFromBuffer(buffer) {
+  if (typeof isAdmin === "function" && !isAdmin()) {
+    throw new Error("Импорт Excel доступен только администратору");
+  }
   const wb = XLSX.read(buffer, { type: "array", cellDates: true });
   const skip = new Set(["Инструкция", "Справочники", "Instructions"]);
   let imported = 0;

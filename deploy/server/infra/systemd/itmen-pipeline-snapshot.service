@@ -1,0 +1,10 @@
+[Unit]
+Description=ITMen Pipeline daily snapshot job
+After=network.target pb-itmen-pipeline.service itmen-pipeline-api.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/itmen-pipeline
+EnvironmentFile=/opt/itmen-pipeline/.env
+ExecStart=/usr/bin/node /opt/itmen-pipeline/scripts/run-daily-snapshot.js
+Nice=10

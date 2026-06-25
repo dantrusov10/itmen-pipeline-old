@@ -4,6 +4,9 @@ let dynamicsData = null;
 let dynamicsLoading = false;
 
 async function apiLoadDynamics(period) {
+  if (window.ITMEN_API?.backend === "pocketbase") {
+    return apiFetch(`/api/dynamics?period=${encodeURIComponent(period)}`);
+  }
   if (window.ITMEN_API?.backend !== "gas") return null;
   const url = `${window.ITMEN_API.gasUrl}?action=dynamics&period=${encodeURIComponent(period)}`;
   const res = await fetch(url, { redirect: "follow" });
@@ -60,9 +63,9 @@ function renderDynamicsBlock(data) {
   const el = document.getElementById("dynamics-block");
   if (!el) return;
   if (!data) {
-    el.innerHTML = window.ITMEN_API?.backend === "gas"
+    el.innerHTML = window.ITMEN_API?.enabled
       ? `<div class="muted">Загрузка динамики…</div>`
-      : `<div class="muted">Динамика доступна при подключённой Google Таблице.</div>`;
+      : `<div class="muted">Динамика доступна при подключении к серверу.</div>`;
     return;
   }
   const s = data.summary || {};
@@ -101,7 +104,7 @@ function renderDynamicsBlock(data) {
 }
 
 async function refreshDynamics(period) {
-  if (window.ITMEN_API?.backend !== "gas") {
+  if (!window.ITMEN_API?.enabled) {
     dynamicsData = null;
     renderDynamicsBlock(null);
     return;
@@ -124,7 +127,7 @@ async function refreshDynamics(period) {
 let dynamicsObserver = null;
 
 function scheduleDynamicsLoad() {
-  if (window.ITMEN_API?.backend !== "gas") return;
+  if (!window.ITMEN_API?.enabled) return;
   if (typeof activePage !== "undefined" && activePage !== "panel") return;
   const block = document.getElementById("dynamics-block");
   if (!block) return;

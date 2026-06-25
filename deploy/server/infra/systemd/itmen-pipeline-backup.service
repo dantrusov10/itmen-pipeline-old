@@ -1,0 +1,8 @@
+[Unit]
+Description=ITMen Pipeline PocketBase backup job
+After=network.target pb-itmen-pipeline.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/itmen-pipeline/scripts/backup.sh
+Nice=10

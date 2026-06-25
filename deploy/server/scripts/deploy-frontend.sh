@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="/opt/itmen-pipeline"
-REPO="${ITMEN_REPO:-https://github.com/dantrusov10/itmen-pipeline-staging.git}"
+REPO="${ITMEN_REPO:-https://github.com/dantrusov10/itmen-pipeline.git}"
 BRANCH="${ITMEN_BRANCH:-master}"
 TMP="$(mktemp -d)"
 
@@ -16,7 +16,9 @@ cp "${ROOT}/infra/frontend/gas-config.js" "${TMP}/src/js/gas-config.js"
 echo "==> Install to ${ROOT}/frontend/current"
 rm -rf "${ROOT}/frontend/current"
 mkdir -p "${ROOT}/frontend"
+chmod 755 "${ROOT}/frontend"
 mv "${TMP}/src" "${ROOT}/frontend/current"
+chmod -R a+rX "${ROOT}/frontend/current"
 rm -rf "${TMP}"
 
 if [[ -f "${ROOT}/frontend/current/ITMen_Pipeline_Шаблон_менеджеров.xlsx" ]]; then

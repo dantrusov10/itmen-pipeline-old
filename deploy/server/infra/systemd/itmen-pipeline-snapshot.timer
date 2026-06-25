@@ -1,0 +1,10 @@
+[Unit]
+Description=ITMen Pipeline daily snapshot (23:59 MSK)
+
+[Timer]
+OnCalendar=*-*-* 20:59:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

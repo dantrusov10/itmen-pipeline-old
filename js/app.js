@@ -325,7 +325,8 @@ async function loadPipelineAfterServerCount(cached, lite, replaced) {
 }
 
 async function bootstrapPipelineFromServer() {
-  showSyncBanner("⟳ Загрузка данных с Google Таблицы…", "sync");
+  const label = window.ITMEN_API?.backend === "pocketbase" ? "сервера" : "Google Таблицы";
+  showSyncBanner(`⟳ Загрузка данных с ${label}…`, "sync");
   const lite = await apiLoadPipeline({ lite: true });
   if (!lite?.deals?.length) throw new Error("Пустой ответ сервера");
   const cached = loadStateLocal();
@@ -485,6 +486,13 @@ function migrateState(s) {
 async function saveState(meta = {}) {
   if (saveInFlight) await saveInFlight;
   saveInFlight = (async () => {
+    if (window.ITMEN_API?.backend === "pocketbase") {
+      const bulk = meta.forceFull || (meta.deletedDealIds?.length > 0)
+        || (meta.editedDealIds?.length !== 1);
+      if (bulk && typeof isAdmin === "function" && !isAdmin()) {
+        throw new Error("Массовые операции доступны только администратору");
+      }
+    }
     if (window.ITMEN_API?.enabled) {
       try {
         if (meta.forceFull) {
@@ -513,6 +521,7 @@ async function saveState(meta = {}) {
           state = migrateState(res.state);
           persistStateCache(state);
         } else if (res.updatedAt) state._savedAt = res.updatedAt;
+        if (res.dataEpoch != null) state._dataEpoch = res.dataEpoch;
         const n = res?.auditRows ?? 0;
         let auditNote = n > 0 ? ` · аудит: ${n} строк` : " · аудит: 0 изменений";
         if (res.conflicts?.length) {
@@ -539,6 +548,10 @@ async function saveState(meta = {}) {
 }
 
 async function resetState() {
+  if (typeof isAdmin === "function" && !isAdmin()) {
+    alert("Сброс данных доступен только администратору");
+    return;
+  }
   if (!confirm("Сбросить все данные к начальным?")) return;
   state = migrateState(structuredClone(window.ITMEN_INITIAL));
   await saveState({ forceFull: true });
@@ -905,7 +918,9 @@ function renderPanel(m) {
       </div>
     </div>` : ""}
 
-    <div class="note">${window.ITMEN_API?.backend === "gas"
+    <div class="note">${window.ITMEN_API?.backend === "pocketbase"
+      ? "Данные в PocketBase · автосохранение при изменениях."
+      : window.ITMEN_API?.backend === "gas"
       ? "Данные в Google Таблице · автосохранение при изменениях."
       : window.ITMEN_API?.enabled
         ? "Данные на сервере · автосохранение при изменениях."
@@ -1158,6 +1173,7 @@ async function openDealModalAsync(idx) {
 
     if (token !== dealModalOpenToken) return;
 
+    const editable = idx == null ? true : canEditDeal(d);
     modal.querySelector(".modal-body").innerHTML = `
     <div class="form-section">
       <div class="form-section-title">Основное</div>
@@ -1217,6 +1233,14 @@ async function openDealModalAsync(idx) {
     </div>`;
 
     toggleBudgetPlannedDate();
+    applyDealModalReadOnly(editable);
+    if (editable && isNew && window.ITMEN_AUTH?.user?.managerName && !isAdmin()) {
+      const ownerEl = document.getElementById("f-owner");
+      if (ownerEl) {
+        ownerEl.value = window.ITMEN_AUTH.user.managerName;
+        ownerEl.disabled = true;
+      }
+    }
   } finally {
     if (token === dealModalOpenToken) dealModalOpening = false;
   }
@@ -1375,14 +1399,40 @@ async function saveDealModalAsync() {
     return;
   }
 
+  if (editingDealIdx != null && !canEditDeal(state.deals[editingDealIdx])) {
+    alert("Можно редактировать только свои сделки");
+    return;
+  }
+
   if (editingDealIdx != null) state.deals[editingDealIdx] = deal;
   else {
     deal.id = consumeDealId();
+    if (window.ITMEN_AUTH?.user?.managerName && !isAdmin()) {
+      deal.owner = window.ITMEN_AUTH.user.managerName;
+    }
     state.deals.push(deal);
   }
 
   closeModal("deal-modal");
-  await saveState({ editedDealIds: [deal.id] });
+
+  if (window.ITMEN_API?.backend === "pocketbase") {
+    try {
+      const res = await apiSaveDeal(deal);
+      if (res.deal) {
+        const i = state.deals.findIndex(x => x.id === deal.id);
+        if (i >= 0) state.deals[i] = migrateDeal(res.deal);
+        persistStateCache(state);
+      }
+      const n = res?.auditRows ?? 0;
+      showToast(`Сохранено (PocketBase) · аудит: ${n} строк`);
+    } catch (e) {
+      alert("Ошибка сохранения: " + e.message);
+      throw e;
+    }
+  } else {
+    await saveState({ editedDealIds: [deal.id] });
+  }
+  invalidateMetricsCache();
   renderAll();
 }
 
@@ -1391,11 +1441,24 @@ function deleteDeal(idx) {
 }
 
 async function deleteDealAsync(idx) {
-  if (!confirm("Удалить сделку " + state.deals[idx].id + "?")) return;
-  const deletedId = state.deals[idx].id;
+  const deal = state.deals[idx];
+  if (!canDeleteDeal(deal)) {
+    alert("Можно удалять только свои сделки");
+    return;
+  }
+  if (!confirm("Удалить сделку " + deal.id + "?")) return;
+  const deletedId = deal.id;
+  if (window.ITMEN_API?.backend === "pocketbase") {
+    await apiDeleteDeal(deletedId);
+  } else {
+    state.deals.splice(idx, 1);
+    invalidateMetricsCache();
+    await saveState({ deletedDealIds: [deletedId] });
+    renderAll();
+    return;
+  }
   state.deals.splice(idx, 1);
   invalidateMetricsCache();
-  await saveState({ deletedDealIds: [deletedId] });
   renderAll();
 }
 
@@ -1423,6 +1486,11 @@ function exportJson() {
 }
 
 async function importJson(input) {
+  if (typeof isAdmin === "function" && !isAdmin()) {
+    alert("Импорт JSON доступен только администратору");
+    input.value = "";
+    return;
+  }
   const file = input.files[0];
   if (!file) return;
   const reader = new FileReader();
@@ -1452,7 +1520,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("menu-toggle")?.addEventListener("click", () =>
     document.getElementById("sidebar").classList.toggle("open"));
   document.querySelectorAll(".modal-overlay").forEach(m => {
-    m.addEventListener("click", e => { if (e.target === m) m.classList.remove("open"); });
+    m.addEventListener("click", e => {
+      if (e.target === m && m.id !== "auth-modal") m.classList.remove("open");
+    });
   });
 
   bindDashboardEvents();
@@ -1460,19 +1530,42 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   if (typeof showEnvironmentBanner === "function") showEnvironmentBanner();
 
+  if (window.ITMEN_API?.backend === "pocketbase" && typeof ensureAuthSession === "function") {
+    const ok = await ensureAuthSession();
+    if (!ok) return;
+    renderAuthTopbar();
+  }
+
   if (window.ITMEN_API?.enabled) {
     try {
       await bootstrapPipelineFromServer();
     } catch (e) {
       console.error(e);
-      state = loadStateLocal();
-      showSyncBanner(
-        `⚠ Не удалось загрузить с сервера: ${escapeHtml(e.message || "ошибка")}. ` +
-        `Показана локальная копия (${(state?.deals || []).length} сделок). ` +
-        `<button type="button" class="btn btn-sm" id="force-reload-btn">Загрузить с сервера</button>`,
-        "error"
-      );
-      document.getElementById("force-reload-btn")?.addEventListener("click", () => forceReloadFromServer());
+      if (window.ITMEN_API?.backend === "pocketbase") {
+        showSyncBanner(
+          `⚠ ${escapeHtml(e.message || "ошибка")}. ` +
+          `<button type="button" class="btn btn-sm" id="retry-login-btn">Войти</button>`,
+          "error"
+        );
+        document.getElementById("retry-login-btn")?.addEventListener("click", async () => {
+          if (await ensureAuthSession()) {
+            renderAuthTopbar();
+            await bootstrapPipelineFromServer();
+            renderAll();
+            updateDealCountBadge();
+          }
+        });
+      } else {
+        state = loadStateLocal();
+        showSyncBanner(
+          `⚠ Не удалось обновить с сервера: ${escapeHtml(e.message || "ошибка")}. Показана локальная копия (${(state?.deals || []).length} сделок). ` +
+          `<button type="button" class="btn btn-sm" id="retry-load-btn">Повторить</button> ` +
+          `<button type="button" class="btn btn-sm" id="force-reload-btn">Загрузить с сервера</button>`,
+          "error"
+        );
+        document.getElementById("retry-load-btn")?.addEventListener("click", () => syncPipelineFromServer());
+        document.getElementById("force-reload-btn")?.addEventListener("click", () => forceReloadFromServer());
+      }
     }
   } else {
     state = loadStateLocal();

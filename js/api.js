@@ -1,17 +1,21 @@
-/* API-клиент: Google Apps Script (GitHub Pages) или локальный Express */
+/* API-клиент: PocketBase (nwlvl.ru), Google Apps Script (GitHub Pages) или локальный Express */
 (function () {
-  const gasUrl = window.ITMEN_GAS_CONFIG?.url || "";
+  const cfg = window.ITMEN_GAS_CONFIG || {};
+  const gasUrl = cfg.url || "";
   const hasGas = gasUrl && !gasUrl.includes("PASTE_YOUR");
   const onGhPages = /\.github\.io$/i.test(location.hostname);
   const onItmenHost = /itmen-pipeline\.nwlvl\.ru$/i.test(location.hostname);
   const onLocal = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+  const forcePb = cfg.usePocketBase === true || window.ITMEN_FORCE_PB;
+  const forceGas = window.ITMEN_FORCE_GAS;
 
   let backend = "local";
-  if (hasGas && (onGhPages || onItmenHost || window.ITMEN_FORCE_GAS || !onLocal)) backend = "gas";
+  if (onItmenHost && forcePb !== false && !forceGas) backend = "pocketbase";
+  else if (hasGas && (onGhPages || forceGas || !onLocal)) backend = "gas";
   else if (onLocal) backend = "express";
 
   window.ITMEN_API = {
-    enabled: backend === "gas" || backend === "express",
+    enabled: backend === "gas" || backend === "express" || backend === "pocketbase",
     backend,
     gasUrl: hasGas ? gasUrl : "",
     needsGasSetup: onGhPages && !hasGas,
@@ -39,21 +43,26 @@ async function gasFetch(payload) {
 }
 
 async function apiFetch(path, opts = {}) {
+  const auth = typeof authHeaders === "function" ? authHeaders() : {};
   const res = await fetch(window.ITMEN_API.base + path, {
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
+      ...auth,
       ...(opts.headers || {}),
     },
     ...opts,
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) {
+    if (res.status === 401 && typeof persistAuth === "function") persistAuth(null);
+    throw new Error(data.error || res.statusText);
+  }
   return data;
 }
 
 async function apiLoadPipeline(opts = {}) {
-  const lite = opts.lite !== false && window.ITMEN_API?.backend === "gas";
+  const lite = opts.lite !== false && (window.ITMEN_API?.backend === "gas" || window.ITMEN_API?.backend === "pocketbase");
   if (window.ITMEN_API.backend === "gas") {
     const action = lite ? "getLite" : "get";
     const res = await fetch(`${window.ITMEN_API.gasUrl}?action=${action}`, { redirect: "follow" });
@@ -66,6 +75,11 @@ async function apiLoadPipeline(opts = {}) {
     }
     if (data.error) throw new Error(data.error);
     return data.state || null;
+  }
+  if (window.ITMEN_API.backend === "pocketbase") {
+    const q = lite ? "?lite=1" : "";
+    const { state } = await apiFetch(`/api/pipeline${q}`);
+    return state || null;
   }
   const { state } = await apiFetch("/api/pipeline");
   return state;
@@ -81,8 +95,32 @@ async function apiLoadDeal(dealId) {
     if (data.error) throw new Error(data.error);
     return data.deal || null;
   }
+  if (window.ITMEN_API.backend === "pocketbase") {
+    const { deal } = await apiFetch(`/api/pipeline/deals/${encodeURIComponent(dealId)}`);
+    return deal || null;
+  }
   const { state } = await apiFetch("/api/pipeline");
   return (state?.deals || []).find(d => d.id === dealId) || null;
+}
+
+async function apiSaveDeal(deal) {
+  if (window.ITMEN_API.backend === "pocketbase") {
+    return apiFetch(`/api/deals/${encodeURIComponent(deal.id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ deal }),
+    });
+  }
+  return apiSavePipeline(
+    { ...state, deals: state.deals.map(d => (d.id === deal.id ? deal : d)) },
+    { editedDealIds: [deal.id] },
+  );
+}
+
+async function apiDeleteDeal(dealId) {
+  if (window.ITMEN_API.backend === "pocketbase") {
+    return apiFetch(`/api/deals/${encodeURIComponent(dealId)}`, { method: "DELETE" });
+  }
+  return apiSavePipeline(state, { deletedDealIds: [dealId] });
 }
 
 async function apiSavePipeline(state, meta = {}) {
@@ -96,9 +134,20 @@ async function apiSavePipeline(state, meta = {}) {
       forceFull: !!meta.forceFull,
     });
   }
+  if (window.ITMEN_API.backend === "pocketbase" && meta.editedDealIds?.length === 1 && !meta.forceFull) {
+    const deal = (state.deals || []).find(d => d.id === meta.editedDealIds[0]);
+    if (deal) return apiSaveDeal(deal);
+  }
   return apiFetch("/api/pipeline", {
     method: "PUT",
-    body: JSON.stringify({ state }),
+    body: JSON.stringify({
+      state,
+      editedDealIds: meta.editedDealIds || [],
+      deletedDealIds: meta.deletedDealIds || [],
+      baseSavedAt: meta.baseSavedAt || state._savedAt || null,
+      baseDataEpoch: meta.baseDataEpoch ?? state._dataEpoch ?? null,
+      forceFull: !!meta.forceFull,
+    }),
   });
 }
 
@@ -113,12 +162,12 @@ async function apiListManagers() {
 }
 
 function apiBackendLabel() {
+  if (window.ITMEN_API.backend === "pocketbase") return "PocketBase";
   if (window.ITMEN_API.backend === "gas") {
     if (/itmen-pipeline\.nwlvl\.ru$/i.test(location.hostname)) return "сервер (GAS staging)";
     return "Google Таблица";
   }
   if (window.ITMEN_API.backend === "express") return "сервер";
-  if (window.ITMEN_API.backend === "pocketbase") return "PocketBase";
   return "этот браузер";
 }
 

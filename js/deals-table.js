@@ -628,11 +628,13 @@ function renderColFilter(col, deals) {
 
 function renderDealsTableRow(d) {
   const realIdx = state.deals.findIndex(x => x.id === d.id);
+  const canDel = typeof canDeleteDeal === "function" ? canDeleteDeal(d) : true;
+  const viewTitle = typeof canEditDeal === "function" && !canEditDeal(d) ? "Просмотр паспорта" : "Редактировать";
   return `<tr class="deals-row-clickable" data-id="${escapeHtml(d.id)}" title="Открыть паспорт сделки">
     ${getVisibleDealsCols().map(c => c.render(d)).join("")}
     <td class="actions">
-      <button type="button" class="btn btn-sm" onclick="event.stopPropagation(); openDealModal(${realIdx})" title="Редактировать">✏️</button>
-      <button type="button" class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteDeal(${realIdx})" title="Удалить">🗑</button>
+      <button type="button" class="btn btn-sm" onclick="event.stopPropagation(); openDealModal(${realIdx})" title="${viewTitle}">✏️</button>
+      ${canDel ? `<button type="button" class="btn btn-sm btn-danger" onclick="event.stopPropagation(); deleteDeal(${realIdx})" title="Удалить">🗑</button>` : ""}
     </td>
   </tr>`;
 }
@@ -1038,15 +1040,16 @@ function renderDealsFilterBanner() {
 function renderDealsTable(deals) {
   const el = document.getElementById("page-deals");
   if (!el) return;
+  const admin = typeof isAdmin === "function" ? isAdmin() : true;
   el.innerHTML = `
     <div class="deals-toolbar">
       <button class="btn btn-primary" onclick="openDealModal()">+ Добавить</button>
-      <label class="btn" style="cursor:pointer">⬆️ Excel<input type="file" id="btn-import-excel" accept=".xlsx,.xls" hidden></label>
+      ${admin ? `<label class="btn" style="cursor:pointer">⬆️ Excel<input type="file" id="btn-import-excel" accept=".xlsx,.xls" hidden></label>` : ""}
       <input type="search" id="deals-global-search" class="deals-global-search" placeholder="Быстрый поиск…" value="${escapeHtml(dealsTableSearch)}">
       <button type="button" class="btn btn-sm" id="deals-clear-filters">Сбросить фильтры</button>
       <button type="button" class="btn btn-sm" id="deals-columns-btn" title="Настроить видимые колонки">⚙ Колонки</button>
       <button type="button" class="btn btn-sm" id="deals-export-excel" title="Экспорт текущего среза в Excel">⬇️ Excel</button>
-      <button type="button" class="btn btn-sm" id="deals-reload-server" title="Сбросить кэш и загрузить все сделки с сервера">⟳ С сервера</button>
+      ${admin ? `<button type="button" class="btn btn-sm" id="deals-reload-server" title="Сбросить кэш и загрузить все сделки с сервера">⟳ С сервера</button>` : ""}
       <button type="button" class="btn btn-sm" id="deals-copy-link" title="Скопировать ссылку с фильтрами">🔗 Поделиться</button>
       <span class="deals-table-meta" id="deals-table-meta"></span>
     </div>

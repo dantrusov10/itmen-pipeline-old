@@ -1,0 +1,17 @@
+[Unit]
+Description=ITMen Pipeline API (Express over PocketBase)
+After=network.target pb-itmen-pipeline.service
+Wants=pb-itmen-pipeline.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/itmen-pipeline/api
+EnvironmentFile=/opt/itmen-pipeline/.env
+Environment=PB_URL=http://127.0.0.1:8095
+Environment=API_PORT=3010
+ExecStart=/usr/bin/node src/index.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
